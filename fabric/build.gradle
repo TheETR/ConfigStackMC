@@ -1,0 +1,41 @@
+plugins { id 'net.fabricmc.fabric-loom' }
+
+def minecraftVersion = providers.gradleProperty('minecraftVersion').orElse('26.1.2').get()
+def fabricLoaderVersion = providers.gradleProperty('fabricLoaderVersion').orElse('0.18.6').get()
+def fabricApiVersion = providers.gradleProperty('fabricApiVersion').orElse('0.152.1+26.1.2').get()
+
+dependencies {
+    minecraft "com.mojang:minecraft:${minecraftVersion}"
+    implementation "net.fabricmc:fabric-loader:${fabricLoaderVersion}"
+    implementation "net.fabricmc.fabric-api:fabric-api:${fabricApiVersion}"
+    implementation project(':common')
+    include project(':common')
+}
+
+tasks.jar {
+    archiveClassifier = 'fabric'
+    manifest {
+        attributes(
+            'Implementation-Title': 'ConfigStackMC Fabric',
+            'Implementation-Version': project.version,
+            'Minecraft-Version': minecraftVersion,
+            'Fabric-Loader-Version': fabricLoaderVersion,
+            'Fabric-API-Version': fabricApiVersion
+        )
+    }
+}
+
+processResources {
+    inputs.property 'version', project.version
+    inputs.property 'minecraftVersion', minecraftVersion
+    inputs.property 'fabricLoaderVersion', fabricLoaderVersion
+    inputs.property 'fabricApiVersion', fabricApiVersion
+    filesMatching('fabric.mod.json') {
+        expand(
+            version: project.version,
+            minecraftVersion: minecraftVersion,
+            fabricLoaderVersion: fabricLoaderVersion,
+            fabricApiVersion: fabricApiVersion
+        )
+    }
+}

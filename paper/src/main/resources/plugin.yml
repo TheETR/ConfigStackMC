@@ -1,0 +1,16 @@
+name: ConfigStackMC
+version: ${version}
+main: io.github.configstackmc.paper.ConfigStackMcPlugin
+api-version: '${minecraftVersion}'
+description: Configurable per-item max stack sizes using Paper item meta max_stack_size.
+authors: [ConfigStackMC]
+commands:
+  stackconfig:
+    description: Reload or inspect ConfigStackMC rules.
+    usage: /stackconfig <reload|info> [item]
+    aliases: [stacks]
+permissions:
+  stackconfig.reload:
+    default: op
+  stackconfig.info:
+    default: true

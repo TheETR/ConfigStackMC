@@ -1,0 +1,30 @@
+def minecraftVersion = providers.gradleProperty('minecraftVersion').orElse('26.1.2').get()
+def paperApiVersion = providers.gradleProperty('paperApiVersion').orElse('26.1.2.build.69-stable').get()
+
+dependencies {
+    implementation project(':common')
+    compileOnly "io.papermc.paper:paper-api:${paperApiVersion}"
+}
+
+processResources {
+    filesMatching('plugin.yml') {
+        expand(
+            version: project.version,
+            minecraftVersion: minecraftVersion,
+            paperApiVersion: paperApiVersion
+        )
+    }
+}
+
+tasks.jar {
+    archiveClassifier = 'paper'
+    from(project(':common').sourceSets.main.output)
+    manifest {
+        attributes(
+            'Implementation-Title': 'ConfigStackMC Paper',
+            'Implementation-Version': project.version,
+            'Minecraft-Version': minecraftVersion,
+            'Paper-API-Version': paperApiVersion
+        )
+    }
+}

@@ -1,0 +1,156 @@
+name: Release
+
+on:
+  schedule:
+    - cron: '23 3 * * *'
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      minecraft_version:
+        description: 'Minecraft version to target, or auto for latest compatible target'
+        required: true
+        default: 'auto'
+      tag_name:
+        description: 'Release tag, or auto for v<plugin-version>-mc<minecraft-version>'
+        required: true
+        default: 'auto'
+      prerelease:
+        description: 'Mark this release as prerelease'
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    name: Build tested Paper and Fabric release jars
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Make Gradle script executable
+        run: chmod +x ./gradlew
+
+      - name: Resolve latest compatible target
+        id: target
+        shell: bash
+        env:
+          REQUESTED_MINECRAFT_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.minecraft_version || 'auto' }}
+        run: bash ./scripts/resolve-release-target.sh "$REQUESTED_MINECRAFT_VERSION"
+
+      - name: Decide release tag
+        id: release_tag
+        shell: bash
+        env:
+          INPUT_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || 'auto' }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
+            TAG="${GITHUB_REF_NAME}"
+          elif [[ -n "${INPUT_TAG}" && "${INPUT_TAG}" != "auto" ]]; then
+            TAG="${INPUT_TAG}"
+          else
+            PROJECT_VERSION=$(grep -o "version = '[^']*'" build.gradle | head -n 1 | cut -d"'" -f2)
+            TAG="v${PROJECT_VERSION}-mc${{ steps.target.outputs.minecraft_version }}"
+          fi
+          echo "release_tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Release tag: ${TAG}"
+
+      - name: Skip scheduled run if release already exists
+        id: existing_release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release_tag.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "schedule" ]] && gh release view "$TAG" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Release ${TAG} already exists. Scheduled run will stop here."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build release jars
+        if: steps.existing_release.outputs.exists != 'true'
+        run: |
+          ./gradlew :common:test :paper:jar :fabric:jar --no-daemon --stacktrace \
+            -PminecraftVersion=${{ steps.target.outputs.minecraft_version }} \
+            -PpaperApiVersion=${{ steps.target.outputs.paper_api_version }} \
+            -PpaperApiVersionShort=${{ steps.target.outputs.paper_api_version_short }} \
+            -PfabricLoaderVersion=${{ steps.target.outputs.fabric_loader_version }} \
+            -PfabricApiVersion=${{ steps.target.outputs.fabric_api_version }}
+
+      - name: Collect release jars
+        if: steps.existing_release.outputs.exists != 'true'
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.release_tag.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          cp paper/build/libs/*paper*.jar "release/ConfigStackMC-${RELEASE_TAG}-paper.jar"
+          cp fabric/build/libs/*fabric*.jar "release/ConfigStackMC-${RELEASE_TAG}-fabric.jar"
+          cd release
+          sha256sum *.jar > SHA256SUMS.txt
+          ls -lah
+
+      - name: Write release notes
+        if: steps.existing_release.outputs.exists != 'true'
+        shell: bash
+        run: |
+          cat > release/RELEASE_NOTES.md <<'EOF'
+          This build targets Minecraft ${{ steps.target.outputs.minecraft_version }}.
+
+          ConfigStackMC lets you edit stack sizes from one simple config file. Items you do not list stay vanilla, so you can change only the things you care about.
+
+          What to download:
+          - Paper server: use the paper jar. Put it in your server's plugins folder. Players do not need to install anything.
+          - Fabric singleplayer or Fabric server: use the fabric jar. Put it in the mods folder.
+          - SHA256SUMS.txt is only for checking downloaded files.
+
+          Built against:
+          - Paper ${{ steps.target.outputs.minecraft_version }} stable, build ${{ steps.target.outputs.paper_build }}
+          - Fabric Loader ${{ steps.target.outputs.fabric_loader_version }}
+          - Fabric API ${{ steps.target.outputs.fabric_api_version }}
+          - Java 25
+
+          Small note: this workflow checks that the mod/plugin builds for this target. Before using it on a main server, it is still worth doing a quick test on a small world.
+          EOF
+
+      - name: Upload build artifact
+        if: steps.existing_release.outputs.exists != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ConfigStackMC-${{ steps.release_tag.outputs.release_tag }}
+          path: |
+            release/*.jar
+            release/SHA256SUMS.txt
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        if: steps.existing_release.outputs.exists != 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release_tag.outputs.release_tag }}
+          target_commitish: ${{ github.sha }}
+          name: ConfigStackMC ${{ steps.release_tag.outputs.release_tag }}
+          prerelease: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || false }}
+          generate_release_notes: false
+          body_path: release/RELEASE_NOTES.md
+          overwrite_files: true
+          files: |
+            release/*.jar
+            release/SHA256SUMS.txt
