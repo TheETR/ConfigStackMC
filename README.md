@@ -332,22 +332,6 @@ The release workflow supports:
 - automatic daily checks for new compatible targets
 - release tags like `v1.0.0-mc26.1.2`
 
----
-
-## Manual test checklist
-
-Before marking a new Minecraft version as fully tested:
-
-- Start a Paper server with the paper jar.
-- Join with a vanilla client.
-- Run `/stackconfig info ender_pearl`.
-- Edit `ender_pearl: 64` and run `/stackconfig reload`.
-- Verify ender pearls stack to 64.
-- Edit `totem_of_undying: 16` and verify compatible totems stack.
-- Verify unconfigured wood/planks remain vanilla.
-- Add an invalid item name and confirm the server/game logs a warning but still starts.
-- Test the Fabric jar in singleplayer.
-- Test the Fabric jar on a Fabric multiplayer server.
 
 ---
 
