@@ -4,9 +4,10 @@
   <img src="https://img.shields.io/github/v/release/TheETR/ConfigStackMC?style=for-the-badge&logo=github&label=Latest%20Release" alt="Latest GitHub release">
   <img src="https://img.shields.io/github/downloads/TheETR/ConfigStackMC/total?style=for-the-badge&logo=github&label=Downloads" alt="GitHub release downloads">
   <img src="https://img.shields.io/github/actions/workflow/status/TheETR/ConfigStackMC/release.yml?branch=main&style=for-the-badge&logo=githubactions&label=Release%20Build" alt="Release workflow status">
-  <img src="https://img.shields.io/badge/Minecraft-versioned%20releases-62B47A?style=for-the-badge&logo=minecraft&logoColor=white" alt="Minecraft versioned releases">
+
   <img src="https://img.shields.io/badge/Paper-server%20plugin-2E7DDE?style=for-the-badge" alt="Paper server plugin">
   <img src="https://img.shields.io/badge/Fabric-singleplayer%20%2B%20server%20mod-DB8A00?style=for-the-badge" alt="Fabric singleplayer and server mod">
+  
   <img src="https://img.shields.io/badge/Java-25-B07219?style=for-the-badge&logo=openjdk&logoColor=white" alt="Java 25">
 </p>
 
