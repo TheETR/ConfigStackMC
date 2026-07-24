@@ -1,5 +1,5 @@
 plugins {
-    id 'net.fabricmc.fabric-loom-remap'
+    id 'net.fabricmc.fabric-loom-remap' version '1.17.16'
 }
 
 def minecraftVersion = providers.gradleProperty('minecraftVersion').orElse('1.20.5').get()
