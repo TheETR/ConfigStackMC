@@ -1,6 +1,16 @@
 name: Release
 
 on:
+  pull_request:
+    paths:
+      - '.github/workflows/release.yml'
+      - 'build.gradle'
+      - 'settings.gradle'
+      - 'common/**'
+      - 'paper/**'
+      - 'fabric/**'
+      - 'fabric-legacy/**'
+      - 'scripts/**'
   schedule:
     - cron: '23 3 * * *'
   push:
@@ -270,7 +280,7 @@ jobs:
   release:
     name: Publish multi-version release
     needs: [discover, common-tests, paper-builds, fabric-builds]
-    if: ${{ always() && needs.common-tests.result == 'success' && needs.paper-builds.result == 'success' }}
+    if: ${{ always() && github.event_name != 'pull_request' && needs.common-tests.result == 'success' && needs.paper-builds.result == 'success' }}
     runs-on: ubuntu-latest
 
     steps:
