@@ -1,5 +1,6 @@
-def minecraftVersion = providers.gradleProperty('minecraftVersion').orElse('26.1.2').get()
-def paperApiVersion = providers.gradleProperty('paperApiVersion').orElse('26.1.2.build.69-stable').get()
+def minecraftVersion = providers.gradleProperty('minecraftVersion').orElse('1.20.5').get()
+def paperApiVersion = providers.gradleProperty('paperApiVersion').orElse('1.20.5-R0.1-SNAPSHOT').get()
+def paperApiVersionShort = providers.gradleProperty('paperApiVersionShort').orElse('1.20.5').get()
 
 dependencies {
     implementation project(':common')
@@ -7,11 +8,17 @@ dependencies {
 }
 
 processResources {
+    inputs.property 'version', project.version
+    inputs.property 'minecraftVersion', minecraftVersion
+    inputs.property 'paperApiVersion', paperApiVersion
+    inputs.property 'paperApiVersionShort', paperApiVersionShort
+
     filesMatching('plugin.yml') {
         expand(
             version: project.version,
             minecraftVersion: minecraftVersion,
-            paperApiVersion: paperApiVersion
+            paperApiVersion: paperApiVersion,
+            paperApiVersionShort: paperApiVersionShort
         )
     }
 }
@@ -23,7 +30,7 @@ tasks.jar {
         attributes(
             'Implementation-Title': 'ConfigStackMC Paper',
             'Implementation-Version': project.version,
-            'Minecraft-Version': minecraftVersion,
+            'Minecraft-Min-Version': minecraftVersion,
             'Paper-API-Version': paperApiVersion
         )
     }

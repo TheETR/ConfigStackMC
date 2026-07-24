@@ -1,31 +1,25 @@
 plugins {
-    id 'net.fabricmc.fabric-loom'
+    id 'net.fabricmc.fabric-loom-remap'
 }
 
-def minecraftVersion = providers.gradleProperty('minecraftVersion').orElse('26.1.2').get()
+def minecraftVersion = providers.gradleProperty('minecraftVersion').orElse('1.20.5').get()
 def fabricLoaderVersion = providers.gradleProperty('fabricLoaderVersion').orElse('0.18.6').get()
-def fabricApiVersion = providers.gradleProperty('fabricApiVersion').orElse('0.152.1+26.1.2').get()
-def javaVersion = providers.gradleProperty('javaVersion').orElse('25').get()
+def fabricApiVersion = providers.gradleProperty('fabricApiVersion').orElse('0.97.6+1.20.5').get()
+def javaVersion = providers.gradleProperty('javaVersion').orElse('21').get()
+
+sourceSets {
+    main {
+        java.srcDir rootProject.file('fabric/src/main/java')
+    }
+}
 
 dependencies {
     minecraft "com.mojang:minecraft:${minecraftVersion}"
+    mappings loom.officialMojangMappings()
     modImplementation "net.fabricmc:fabric-loader:${fabricLoaderVersion}"
     modImplementation "net.fabricmc.fabric-api:fabric-api:${fabricApiVersion}"
     implementation project(':common')
     include project(':common')
-}
-
-tasks.jar {
-    archiveClassifier = 'fabric'
-    manifest {
-        attributes(
-            'Implementation-Title': 'ConfigStackMC Fabric',
-            'Implementation-Version': project.version,
-            'Minecraft-Version': minecraftVersion,
-            'Fabric-Loader-Version': fabricLoaderVersion,
-            'Fabric-API-Version': fabricApiVersion
-        )
-    }
 }
 
 processResources {
@@ -42,6 +36,18 @@ processResources {
             fabricLoaderVersion: fabricLoaderVersion,
             fabricApiVersion: fabricApiVersion,
             javaVersion: javaVersion
+        )
+    }
+}
+
+tasks.jar {
+    manifest {
+        attributes(
+            'Implementation-Title': 'ConfigStackMC Fabric Legacy',
+            'Implementation-Version': project.version,
+            'Minecraft-Version': minecraftVersion,
+            'Fabric-Loader-Version': fabricLoaderVersion,
+            'Fabric-API-Version': fabricApiVersion
         )
     }
 }

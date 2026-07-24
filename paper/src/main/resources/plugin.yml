@@ -1,7 +1,7 @@
 name: ConfigStackMC
 version: ${version}
 main: io.github.configstackmc.paper.ConfigStackMcPlugin
-api-version: '${minecraftVersion}'
+api-version: '${paperApiVersionShort}'
 description: Configurable per-item max stack sizes using Paper item meta max_stack_size.
 authors: [ConfigStackMC]
 commands:

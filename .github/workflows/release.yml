@@ -8,16 +8,16 @@ on:
       - 'v*'
   workflow_dispatch:
     inputs:
-      minecraft_version:
-        description: 'Minecraft version to target, or auto for latest compatible target'
+      minimum_minecraft_version:
+        description: 'Oldest Minecraft version to package'
         required: true
-        default: 'auto'
+        default: '1.20.5'
       tag_name:
-        description: 'Release tag, or auto for v<plugin-version>-mc<minecraft-version>'
+        description: 'Release tag, or auto for v<plugin-version>-mc<latest-version>'
         required: true
         default: 'auto'
       prerelease:
-        description: 'Mark this release as prerelease'
+        description: 'Force the release to be marked as a prerelease'
         required: true
         default: false
         type: boolean
@@ -26,131 +26,353 @@ permissions:
   contents: write
 
 jobs:
-  build-release:
-    name: Build tested Paper and Fabric release jars
+  discover:
+    name: Discover Paper and Fabric targets
     runs-on: ubuntu-latest
+    outputs:
+      paper_targets: ${{ steps.matrix.outputs.paper_targets }}
+      fabric_matrix: ${{ steps.matrix.outputs.fabric_matrix }}
+      paper_target_count: ${{ steps.matrix.outputs.paper_target_count }}
+      fabric_target_count: ${{ steps.matrix.outputs.fabric_target_count }}
+      latest_minecraft_version: ${{ steps.matrix.outputs.latest_minecraft_version }}
+      latest_paper_build: ${{ steps.matrix.outputs.latest_paper_build }}
+      latest_paper_channel: ${{ steps.matrix.outputs.latest_paper_channel }}
+      fabric_loader_version: ${{ steps.matrix.outputs.fabric_loader_version }}
+      fabric_loader_stable: ${{ steps.matrix.outputs.fabric_loader_stable }}
+      auto_prerelease: ${{ steps.matrix.outputs.auto_prerelease }}
+      release_tag: ${{ steps.release_tag.outputs.release_tag }}
+      project_version: ${{ steps.release_tag.outputs.project_version }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Java 25
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '25'
-
-      - name: Make Gradle script executable
-        run: chmod +x ./gradlew
-
-      - name: Resolve latest compatible target
-        id: target
+      - name: Resolve release matrix
+        id: matrix
         shell: bash
         env:
-          REQUESTED_MINECRAFT_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.minecraft_version || 'auto' }}
-        run: bash ./scripts/resolve-release-target.sh "$REQUESTED_MINECRAFT_VERSION"
+          MINIMUM_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.minimum_minecraft_version || '1.20.5' }}
+        run: bash ./scripts/resolve-release-matrix.sh "$MINIMUM_VERSION"
 
       - name: Decide release tag
         id: release_tag
         shell: bash
         env:
           INPUT_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || 'auto' }}
+          LATEST_MINECRAFT_VERSION: ${{ steps.matrix.outputs.latest_minecraft_version }}
         run: |
           set -euo pipefail
+          PROJECT_VERSION=$(grep -o "version = '[^']*'" build.gradle | head -n 1 | cut -d"'" -f2)
+
           if [[ "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
             TAG="${GITHUB_REF_NAME}"
           elif [[ -n "${INPUT_TAG}" && "${INPUT_TAG}" != "auto" ]]; then
             TAG="${INPUT_TAG}"
           else
-            PROJECT_VERSION=$(grep -o "version = '[^']*'" build.gradle | head -n 1 | cut -d"'" -f2)
-            TAG="v${PROJECT_VERSION}-mc${{ steps.target.outputs.minecraft_version }}"
+            TAG="v${PROJECT_VERSION}-mc${LATEST_MINECRAFT_VERSION}"
           fi
+
+          echo "project_version=${PROJECT_VERSION}" >> "$GITHUB_OUTPUT"
           echo "release_tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "Release tag: ${TAG}"
 
-      - name: Skip scheduled run if release already exists
-        id: existing_release
+  common-tests:
+    name: Test shared configuration parser
+    needs: discover
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+
+      - name: Make Gradle script executable
+        run: chmod +x ./gradlew
+
+      - name: Run common tests
+        run: ./gradlew :common:test --configure-on-demand --no-daemon --stacktrace -PjavaVersion=21
+
+  paper-builds:
+    name: Build universal Paper jar and version aliases
+    needs: [discover, common-tests]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+
+      - name: Make Gradle script executable
+        run: chmod +x ./gradlew
+
+      - name: Build Paper compatibility jar
+        run: |
+          ./gradlew :paper:jar --configure-on-demand --no-daemon --stacktrace \
+            -PjavaVersion=21 \
+            -PminecraftVersion=1.20.5 \
+            -PpaperApiVersion=1.20.5-R0.1-SNAPSHOT \
+            -PpaperApiVersionShort=1.20.5
+
+      - name: Package Paper aliases
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.release_tag.outputs.release_tag }}
+          PAPER_TARGETS: ${{ needs.discover.outputs.paper_targets }}
+          PROJECT_VERSION: ${{ needs.discover.outputs.project_version }}
         run: |
           set -euo pipefail
-          if [[ "${{ github.event_name }}" == "schedule" ]] && gh release view "$TAG" >/dev/null 2>&1; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-            echo "Release ${TAG} already exists. Scheduled run will stop here."
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
+          mkdir -p out/status
+
+          PAPER_JAR=$(find paper/build/libs -maxdepth 1 -type f -name '*-paper.jar' | sort | head -n 1)
+          if [[ -z "${PAPER_JAR}" ]]; then
+            echo 'Paper jar was not produced.' >&2
+            exit 1
           fi
 
-      - name: Build release jars
-        if: steps.existing_release.outputs.exists != 'true'
-        run: |
-          ./gradlew :common:test :paper:jar :fabric:jar --no-daemon --stacktrace \
-            -PminecraftVersion=${{ steps.target.outputs.minecraft_version }} \
-            -PpaperApiVersion=${{ steps.target.outputs.paper_api_version }} \
-            -PpaperApiVersionShort=${{ steps.target.outputs.paper_api_version_short }} \
-            -PfabricLoaderVersion=${{ steps.target.outputs.fabric_loader_version }} \
-            -PfabricApiVersion=${{ steps.target.outputs.fabric_api_version }}
+          cp "$PAPER_JAR" "out/ConfigStackMC-${PROJECT_VERSION}-paper-universal-mc1.20.5-plus.jar"
 
-      - name: Collect release jars
-        if: steps.existing_release.outputs.exists != 'true'
+          jq -r '.[].minecraft_version' <<<"$PAPER_TARGETS" | while IFS= read -r minecraft_version; do
+            cp "$PAPER_JAR" "out/ConfigStackMC-${PROJECT_VERSION}-paper-mc${minecraft_version}.jar"
+          done
+
+          jq -n \
+            --arg status success \
+            --arg minimum_minecraft_version 1.20.5 \
+            --argjson targets "$PAPER_TARGETS" \
+            '{status: $status, minimum_minecraft_version: $minimum_minecraft_version, targets: $targets}' \
+            > out/status/paper.json
+
+          ls -lah out
+
+      - name: Upload Paper builds
+        uses: actions/upload-artifact@v4
+        with:
+          name: paper-builds
+          path: out
+          if-no-files-found: error
+
+  fabric-builds:
+    name: Fabric ${{ matrix.minecraft_version }} (${{ matrix.loom_generation }})
+    needs: [discover, common-tests]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.discover.outputs.fabric_matrix) }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java ${{ matrix.java_version }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java_version }}
+          cache: gradle
+
+      - name: Make Gradle script executable
+        run: chmod +x ./gradlew
+
+      - name: Build Fabric target
+        id: build
         shell: bash
         env:
-          RELEASE_TAG: ${{ steps.release_tag.outputs.release_tag }}
+          MINECRAFT_VERSION: ${{ matrix.minecraft_version }}
+          PAPER_BUILD: ${{ matrix.paper_build }}
+          PAPER_CHANNEL: ${{ matrix.paper_channel }}
+          FABRIC_API_VERSION: ${{ matrix.fabric_api_version }}
+          FABRIC_LOADER_VERSION: ${{ matrix.fabric_loader_version }}
+          FABRIC_PROJECT: ${{ matrix.fabric_project }}
+          JAVA_VERSION: ${{ matrix.java_version }}
+          LOOM_GENERATION: ${{ matrix.loom_generation }}
+          PROJECT_VERSION: ${{ needs.discover.outputs.project_version }}
+        run: |
+          set -uo pipefail
+          mkdir -p out/status
+
+          set +e
+          ./gradlew ":${FABRIC_PROJECT}:build" --configure-on-demand --no-daemon --stacktrace \
+            -PjavaVersion="${JAVA_VERSION}" \
+            -PminecraftVersion="${MINECRAFT_VERSION}" \
+            -PfabricLoaderVersion="${FABRIC_LOADER_VERSION}" \
+            -PfabricApiVersion="${FABRIC_API_VERSION}"
+          gradle_exit=$?
+          set -e
+
+          status=failure
+          reason="Gradle exited with code ${gradle_exit}"
+
+          if [[ $gradle_exit -eq 0 ]]; then
+            jar_path=$(find "${FABRIC_PROJECT}/build/libs" -maxdepth 1 -type f -name '*.jar' \
+              ! -name '*sources*' ! -name '*dev*' | sort | head -n 1)
+
+            if [[ -n "${jar_path}" ]]; then
+              cp "$jar_path" "out/ConfigStackMC-${PROJECT_VERSION}-fabric-mc${MINECRAFT_VERSION}.jar"
+              status=success
+              reason='Build completed'
+            else
+              reason='Gradle succeeded but no distributable jar was found'
+            fi
+          fi
+
+          jq -n \
+            --arg status "$status" \
+            --arg reason "$reason" \
+            --arg minecraft_version "$MINECRAFT_VERSION" \
+            --arg paper_build "$PAPER_BUILD" \
+            --arg paper_channel "$PAPER_CHANNEL" \
+            --arg fabric_api_version "$FABRIC_API_VERSION" \
+            --arg fabric_loader_version "$FABRIC_LOADER_VERSION" \
+            --arg fabric_project "$FABRIC_PROJECT" \
+            --arg java_version "$JAVA_VERSION" \
+            --arg loom_generation "$LOOM_GENERATION" \
+            '{
+              status: $status,
+              reason: $reason,
+              minecraft_version: $minecraft_version,
+              paper_build: $paper_build,
+              paper_channel: $paper_channel,
+              fabric_api_version: $fabric_api_version,
+              fabric_loader_version: $fabric_loader_version,
+              fabric_project: $fabric_project,
+              java_version: $java_version,
+              loom_generation: $loom_generation
+            }' > "out/status/fabric-mc${MINECRAFT_VERSION}.json"
+
+          if [[ "$status" == success ]]; then
+            echo "### Fabric ${MINECRAFT_VERSION}: built successfully" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### Fabric ${MINECRAFT_VERSION}: build unavailable" >> "$GITHUB_STEP_SUMMARY"
+            echo "${reason}" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          # A broken historical target must not cancel the remaining release matrix.
+          exit 0
+
+      - name: Upload Fabric target result
+        uses: actions/upload-artifact@v4
+        with:
+          name: fabric-mc${{ matrix.minecraft_version }}
+          path: out
+          if-no-files-found: error
+
+  release:
+    name: Publish multi-version release
+    needs: [discover, common-tests, paper-builds, fabric-builds]
+    if: ${{ always() && needs.common-tests.result == 'success' && needs.paper-builds.result == 'success' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Paper builds
+        uses: actions/download-artifact@v4
+        with:
+          name: paper-builds
+          path: release
+
+      - name: Download Fabric target results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: fabric-mc*
+          path: release
+          merge-multiple: true
+
+      - name: Write checksums and build report
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.discover.outputs.release_tag }}
+          LATEST_MINECRAFT_VERSION: ${{ needs.discover.outputs.latest_minecraft_version }}
+          LATEST_PAPER_BUILD: ${{ needs.discover.outputs.latest_paper_build }}
+          LATEST_PAPER_CHANNEL: ${{ needs.discover.outputs.latest_paper_channel }}
+          FABRIC_LOADER_VERSION: ${{ needs.discover.outputs.fabric_loader_version }}
+          FABRIC_LOADER_STABLE: ${{ needs.discover.outputs.fabric_loader_stable }}
+          PAPER_TARGET_COUNT: ${{ needs.discover.outputs.paper_target_count }}
+          FABRIC_TARGET_COUNT: ${{ needs.discover.outputs.fabric_target_count }}
         run: |
           set -euo pipefail
-          mkdir -p release
-          cp paper/build/libs/*paper*.jar "release/ConfigStackMC-${RELEASE_TAG}-paper.jar"
-          cp fabric/build/libs/*fabric*.jar "release/ConfigStackMC-${RELEASE_TAG}-fabric.jar"
+
+          jar_count=$(find release -maxdepth 1 -type f -name '*.jar' | wc -l | tr -d ' ')
+          if [[ "$jar_count" -eq 0 ]]; then
+            echo 'No release jars were produced.' >&2
+            exit 1
+          fi
+
+          success_count=$(jq -r 'select(.status == "success") | .minecraft_version' release/status/fabric-*.json 2>/dev/null | wc -l | tr -d ' ')
+          failure_count=$(jq -r 'select(.status != "success") | .minecraft_version' release/status/fabric-*.json 2>/dev/null | wc -l | tr -d ' ')
+
+          cat > release/BUILD_REPORT.md <<EOF_REPORT
+          # ConfigStackMC ${RELEASE_TAG}
+
+          This release packages every Minecraft version discovered from Paper starting at 1.20.5. Paper channels are not restricted to STABLE, so beta or experimental targets are included as soon as Paper publishes a build.
+
+          ## Latest discovered target
+
+          - Minecraft: ${LATEST_MINECRAFT_VERSION}
+          - Paper build: ${LATEST_PAPER_BUILD}
+          - Paper channel: ${LATEST_PAPER_CHANNEL}
+          - Fabric Loader used for compilation: ${FABRIC_LOADER_VERSION} (stable=${FABRIC_LOADER_STABLE})
+
+          ## Results
+
+          - Paper version aliases: ${PAPER_TARGET_COUNT}
+          - Fabric targets attempted: ${FABRIC_TARGET_COUNT}
+          - Fabric jars built: ${success_count}
+          - Fabric targets unavailable: ${failure_count}
+
+          Paper files are aliases of one Java 21 jar built against the Paper 1.20.5 API, which is the minimum supported Paper version. Fabric files are compiled separately for their exact Minecraft version.
+
+          ### Fabric builds
+          EOF_REPORT
+
+          for status_file in $(find release/status -maxdepth 1 -type f -name 'fabric-*.json' | sort -V); do
+            jq -r '
+              "- Minecraft " + .minecraft_version
+              + ": **" + .status + "**"
+              + " | " + .loom_generation
+              + " | Java " + .java_version
+              + " | Fabric API " + .fabric_api_version
+              + (if .status == "success" then "" else " | " + .reason end)
+            ' "$status_file" >> release/BUILD_REPORT.md
+          done
+
           cd release
           sha256sum *.jar > SHA256SUMS.txt
           ls -lah
 
-      - name: Write release notes
-        if: steps.existing_release.outputs.exists != 'true'
-        shell: bash
-        run: |
-          cat > release/RELEASE_NOTES.md <<'EOF'
-          This build targets Minecraft ${{ steps.target.outputs.minecraft_version }}.
-
-          ConfigStackMC lets you edit stack sizes from one simple config file. Items you do not list stay vanilla, so you can change only the things you care about.
-
-          What to download:
-          - Paper server: use the paper jar. Put it in your server's plugins folder. Players do not need to install anything.
-          - Fabric singleplayer or Fabric server: use the fabric jar. Put it in the mods folder.
-          - SHA256SUMS.txt is only for checking downloaded files.
-
-          Built against:
-          - Paper ${{ steps.target.outputs.minecraft_version }} stable, build ${{ steps.target.outputs.paper_build }}
-          - Fabric Loader ${{ steps.target.outputs.fabric_loader_version }}
-          - Fabric API ${{ steps.target.outputs.fabric_api_version }}
-          - Java 25
-
-          Small note: this workflow checks that the mod/plugin builds for this target. Before using it on a main server, it is still worth doing a quick test on a small world.
-          EOF
-
-      - name: Upload build artifact
-        if: steps.existing_release.outputs.exists != 'true'
+      - name: Upload complete release artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ConfigStackMC-${{ steps.release_tag.outputs.release_tag }}
+          name: ConfigStackMC-${{ needs.discover.outputs.release_tag }}
           path: |
             release/*.jar
             release/SHA256SUMS.txt
+            release/BUILD_REPORT.md
           if-no-files-found: error
 
-      - name: Create GitHub Release
-        if: steps.existing_release.outputs.exists != 'true'
+      - name: Create or update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.release_tag.outputs.release_tag }}
+          tag_name: ${{ needs.discover.outputs.release_tag }}
           target_commitish: ${{ github.sha }}
-          name: ConfigStackMC ${{ steps.release_tag.outputs.release_tag }}
-          prerelease: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || false }}
+          name: ConfigStackMC ${{ needs.discover.outputs.release_tag }}
+          prerelease: ${{ (github.event_name == 'workflow_dispatch' && inputs.prerelease) || needs.discover.outputs.auto_prerelease == 'true' }}
           generate_release_notes: false
-          body_path: release/RELEASE_NOTES.md
+          body_path: release/BUILD_REPORT.md
           overwrite_files: true
           files: |
             release/*.jar
             release/SHA256SUMS.txt
+            release/BUILD_REPORT.md
