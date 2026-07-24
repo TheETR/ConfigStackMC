@@ -1,5 +1,5 @@
 def minecraftVersion = providers.gradleProperty('minecraftVersion').orElse('1.20.5').get()
-def paperApiVersion = providers.gradleProperty('paperApiVersion').orElse('1.20.5-R0.1-SNAPSHOT').get()
+def paperApiVersion = providers.gradleProperty('paperApiVersion').orElse('1.20.6-R0.1-SNAPSHOT').get()
 def paperApiVersionShort = providers.gradleProperty('paperApiVersionShort').orElse('1.20.5').get()
 
 dependencies {

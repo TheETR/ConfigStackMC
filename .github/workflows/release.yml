@@ -132,7 +132,7 @@ jobs:
           ./gradlew :paper:jar --configure-on-demand --no-daemon --stacktrace \
             -PjavaVersion=21 \
             -PminecraftVersion=1.20.5 \
-            -PpaperApiVersion=1.20.5-R0.1-SNAPSHOT \
+            -PpaperApiVersion=1.20.6-R0.1-SNAPSHOT \
             -PpaperApiVersionShort=1.20.5
 
       - name: Package Paper aliases
@@ -342,7 +342,7 @@ jobs:
           - Fabric jars built: ${success_count}
           - Fabric targets unavailable: ${failure_count}
 
-          Paper files are aliases of one Java 21 jar built against the Paper 1.20.5 API, which is the minimum supported Paper version. Fabric files are compiled separately for their exact Minecraft version.
+          Paper files are aliases of one Java 21 jar compiled against the Paper 1.20.6 API while declaring Paper 1.20.5 as the minimum runtime. Fabric files are compiled separately for their exact Minecraft version.
 
           ### Fabric builds
           EOF_REPORT
