@@ -35,3 +35,13 @@ tasks.jar {
         )
     }
 }
+
+configurations.configureEach {
+    resolutionStrategy.eachDependency { details ->
+        if (details.requested.group == 'net.kyori' &&
+            details.requested.version == '4.17.0-SNAPSHOT') {
+            details.useVersion '4.17.0'
+            details.because 'Paper 1.20.5 API references an expired Adventure snapshot'
+        }
+    }
+}
