@@ -9,8 +9,8 @@ def javaVersion = providers.gradleProperty('javaVersion').orElse('25').get()
 
 dependencies {
     minecraft "com.mojang:minecraft:${minecraftVersion}"
-    modImplementation "net.fabricmc:fabric-loader:${fabricLoaderVersion}"
-    modImplementation "net.fabricmc.fabric-api:fabric-api:${fabricApiVersion}"
+    implementation "net.fabricmc:fabric-loader:${fabricLoaderVersion}"
+    implementation "net.fabricmc.fabric-api:fabric-api:${fabricApiVersion}"
     implementation project(':common')
     include project(':common')
 }
