@@ -17,6 +17,10 @@ for tool in curl jq sort grep sed awk; do
   require_tool "$tool"
 done
 
+is_release_version() {
+  [[ "$1" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]]
+}
+
 version_at_least() {
   local version="$1"
   local minimum="$2"
@@ -27,7 +31,8 @@ paper_versions() {
   curl -fsSL -H "User-Agent: ${USER_AGENT}" \
     "https://fill.papermc.io/v3/projects/${PAPER_PROJECT}" \
     | jq -r '.versions | to_entries[] | .value[]' \
-    | sort -V
+    | grep -E '^[0-9]+(\.[0-9]+){1,2}$' \
+    | sort -Vu
 }
 
 latest_paper_build() {
@@ -67,6 +72,7 @@ FABRIC_TARGETS='[]'
 
 while IFS= read -r minecraft_version; do
   [[ -n "$minecraft_version" ]] || continue
+  is_release_version "$minecraft_version" || continue
   version_at_least "$minecraft_version" "$MINIMUM_VERSION" || continue
 
   paper_build_json="$(latest_paper_build "$minecraft_version" || true)"

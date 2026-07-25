@@ -19,7 +19,7 @@ on:
   workflow_dispatch:
     inputs:
       minimum_minecraft_version:
-        description: 'Oldest Minecraft version to package'
+        description: 'Oldest Minecraft release to package'
         required: true
         default: '1.20.5'
       tag_name:
@@ -163,8 +163,6 @@ jobs:
             '{status: $status, minimum_minecraft_version: $minimum_minecraft_version, targets: $targets}' \
             > out/status/paper.json
 
-          ls -lah out
-
       - name: Upload Paper builds
         uses: actions/upload-artifact@v4
         with:
@@ -195,7 +193,6 @@ jobs:
         run: chmod +x ./gradlew
 
       - name: Build Fabric target
-        id: build
         shell: bash
         env:
           MINECRAFT_VERSION: ${{ matrix.minecraft_version }}
@@ -267,7 +264,7 @@ jobs:
             echo "${reason}" >> "$GITHUB_STEP_SUMMARY"
           fi
 
-          # A broken historical target must not cancel the remaining release matrix.
+          # One unavailable historical target must not cancel the remaining matrix.
           exit 0
 
       - name: Upload Fabric target result
@@ -277,10 +274,10 @@ jobs:
           path: out
           if-no-files-found: error
 
-  release:
-    name: Publish multi-version release
+  assemble-release:
+    name: Assemble and validate multi-version release
     needs: [discover, common-tests, paper-builds, fabric-builds]
-    if: ${{ always() && github.event_name != 'pull_request' && needs.common-tests.result == 'success' && needs.paper-builds.result == 'success' }}
+    if: ${{ always() && needs.common-tests.result == 'success' && needs.paper-builds.result == 'success' }}
     runs-on: ubuntu-latest
 
     steps:
@@ -300,10 +297,13 @@ jobs:
           path: release
           merge-multiple: true
 
-      - name: Write checksums and build report
+      - name: Validate artifacts and write release report
+        id: asset_order
         shell: bash
         env:
           RELEASE_TAG: ${{ needs.discover.outputs.release_tag }}
+          PROJECT_VERSION: ${{ needs.discover.outputs.project_version }}
+          PAPER_TARGETS: ${{ needs.discover.outputs.paper_targets }}
           LATEST_MINECRAFT_VERSION: ${{ needs.discover.outputs.latest_minecraft_version }}
           LATEST_PAPER_BUILD: ${{ needs.discover.outputs.latest_paper_build }}
           LATEST_PAPER_CHANNEL: ${{ needs.discover.outputs.latest_paper_channel }}
@@ -314,19 +314,26 @@ jobs:
         run: |
           set -euo pipefail
 
-          jar_count=$(find release -maxdepth 1 -type f -name '*.jar' | wc -l | tr -d ' ')
-          if [[ "$jar_count" -eq 0 ]]; then
-            echo 'No release jars were produced.' >&2
+          mapfile -t status_files < <(find release/status -maxdepth 1 -type f -name 'fabric-*.json' | sort -V)
+          if [[ ${#status_files[@]} -eq 0 ]]; then
+            echo 'No Fabric status files were downloaded.' >&2
             exit 1
           fi
 
-          success_count=$(jq -r 'select(.status == "success") | .minecraft_version' release/status/fabric-*.json 2>/dev/null | wc -l | tr -d ' ')
-          failure_count=$(jq -r 'select(.status != "success") | .minecraft_version' release/status/fabric-*.json 2>/dev/null | wc -l | tr -d ' ')
+          success_count=0
+          failure_count=0
+          for status_file in "${status_files[@]}"; do
+            if [[ "$(jq -r '.status' "$status_file")" == success ]]; then
+              ((success_count += 1))
+            else
+              ((failure_count += 1))
+            fi
+          done
 
           cat > release/BUILD_REPORT.md <<EOF_REPORT
           # ConfigStackMC ${RELEASE_TAG}
 
-          This release packages every Minecraft version discovered from Paper starting at 1.20.5. Paper channels are not restricted to STABLE, so beta or experimental targets are included as soon as Paper publishes a build.
+          This release packages normal Minecraft releases discovered from Paper starting at 1.20.5. Minecraft snapshots, pre-releases and release candidates are excluded. Paper channels are not restricted to STABLE, so beta or experimental Paper builds are included as soon as they are available for a released Minecraft version.
 
           ## Latest discovered target
 
@@ -344,10 +351,10 @@ jobs:
 
           Paper files are aliases of one Java 21 jar compiled against the Paper 1.20.6 API while declaring Paper 1.20.5 as the minimum runtime. Fabric files are compiled separately for their exact Minecraft version.
 
-          ### Fabric builds
+          ### Fabric builds, oldest to newest
           EOF_REPORT
 
-          for status_file in $(find release/status -maxdepth 1 -type f -name 'fabric-*.json' | sort -V); do
+          for status_file in "${status_files[@]}"; do
             jq -r '
               "- Minecraft " + .minecraft_version
               + ": **" + .status + "**"
@@ -358,11 +365,50 @@ jobs:
             ' "$status_file" >> release/BUILD_REPORT.md
           done
 
-          cd release
-          sha256sum *.jar > SHA256SUMS.txt
-          ls -lah
+          universal="release/ConfigStackMC-${PROJECT_VERSION}-paper-universal-mc1.20.5-plus.jar"
+          [[ -f "$universal" ]] || { echo "Missing universal Paper jar: $universal" >&2; exit 1; }
 
-      - name: Upload complete release artifact
+          ordered_jars=("$universal")
+          while IFS= read -r minecraft_version; do
+            paper_jar="release/ConfigStackMC-${PROJECT_VERSION}-paper-mc${minecraft_version}.jar"
+            [[ -f "$paper_jar" ]] || { echo "Missing Paper alias: $paper_jar" >&2; exit 1; }
+            ordered_jars+=("$paper_jar")
+
+            fabric_jar="release/ConfigStackMC-${PROJECT_VERSION}-fabric-mc${minecraft_version}.jar"
+            if [[ -f "$fabric_jar" ]]; then
+              ordered_jars+=("$fabric_jar")
+            fi
+          done < <(jq -r '.[].minecraft_version' <<<"$PAPER_TARGETS" | sort -V)
+
+          : > release/SHA256SUMS.txt
+          for jar in "${ordered_jars[@]}"; do
+            sha256sum "$jar" | sed 's#  release/#  #' >> release/SHA256SUMS.txt
+          done
+
+          {
+            echo 'release/BUILD_REPORT.md'
+            echo 'release/SHA256SUMS.txt'
+            printf '%s\n' "${ordered_jars[@]}"
+          } > release/ASSET_ORDER.txt
+
+          actual_jar_count=$(find release -maxdepth 1 -type f -name '*.jar' | wc -l | tr -d ' ')
+          if [[ "$actual_jar_count" -ne "${#ordered_jars[@]}" ]]; then
+            echo "Asset order contains ${#ordered_jars[@]} jars, but ${actual_jar_count} jars exist." >&2
+            find release -maxdepth 1 -type f -name '*.jar' -print | sort -V >&2
+            exit 1
+          fi
+
+          {
+            echo 'files<<EOF_FILES'
+            cat release/ASSET_ORDER.txt
+            echo 'EOF_FILES'
+          } >> "$GITHUB_OUTPUT"
+
+          echo '### Release asset order' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Oldest versions are uploaded first; the newest Minecraft version is last.' >> "$GITHUB_STEP_SUMMARY"
+          sed 's#^release/#- #' release/ASSET_ORDER.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload validated release bundle
         uses: actions/upload-artifact@v4
         with:
           name: ConfigStackMC-${{ needs.discover.outputs.release_tag }}
@@ -370,10 +416,32 @@ jobs:
             release/*.jar
             release/SHA256SUMS.txt
             release/BUILD_REPORT.md
+            release/ASSET_ORDER.txt
           if-no-files-found: error
 
-      - name: Create or update GitHub Release
-        uses: softprops/action-gh-release@v2
+      - name: Check whether release already exists
+        id: release_guard
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.discover.outputs.release_tag }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$EVENT_NAME" == pull_request ]]; then
+            echo 'publish=false' >> "$GITHUB_OUTPUT"
+            echo 'PR validation completed; publishing is intentionally skipped.'
+          elif gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
+            echo 'publish=false' >> "$GITHUB_OUTPUT"
+            echo "Release ${RELEASE_TAG} already exists; leaving the immutable release untouched."
+          else
+            echo 'publish=true' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release
+        if: steps.release_guard.outputs.publish == 'true'
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.discover.outputs.release_tag }}
           target_commitish: ${{ github.sha }}
@@ -382,7 +450,6 @@ jobs:
           generate_release_notes: false
           body_path: release/BUILD_REPORT.md
           overwrite_files: true
-          files: |
-            release/*.jar
-            release/SHA256SUMS.txt
-            release/BUILD_REPORT.md
+          preserve_order: true
+          fail_on_unmatched_files: true
+          files: ${{ steps.asset_order.outputs.files }}

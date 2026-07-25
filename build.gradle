@@ -7,6 +7,7 @@ allprojects {
     version = '1.0.0'
 }
 
+// Fabric Loom 1.17 requires Gradle 9.5; gradlew reads that version from gradle-wrapper.properties.
 def targetJavaVersion = (findProperty('javaVersion') ?: '25') as int
 
 subprojects {
